@@ -8,6 +8,7 @@ import { FSUtil } from "@opencode/util/fs-util"
 import { Location } from "../../location.js"
 import { FileAccess } from "../../file-access.js"
 import { SessionInstructions } from "../../session/instructions.js"
+import { InstructionDiscovery } from "../../instruction-discovery.js"
 import { AbsolutePath } from "../../schema.js"
 import { ReadToolFileSystem } from "../read-filesystem.js"
 import { Environment } from "../../environment/index.js"
@@ -32,6 +33,7 @@ export const Plugin = {
     const reader = yield* ReadToolFileSystem.Service
     const access = yield* FileAccess.Service
     const sessionInstructions = yield* SessionInstructions.Service
+    const discovery = yield* InstructionDiscovery.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
 
@@ -111,13 +113,40 @@ export const Plugin = {
                 !ReadToolFileSystem.MEDIA_MIMES.has(result.content.mime)
               )
                 return yield* Effect.fail(new ReadToolFileSystem.BinaryFileError({ resource: result.target.resource }))
-              return { output: result.content, path: result.path }
+              // Wire contract (ReadToolSuccess): every read attaches applicable project
+              // rules (related_cursor_rule_paths + related_cursor_rules). Our discovery
+              // model carries no globs, so "applicable" = discovered project rule files.
+              const relatedRules = yield* discovery
+                .list()
+                .pipe(
+                  Effect.map((files) =>
+                    (Array.isArray(files) ? files : [])
+                      .filter((file) => /rules|\.cursor|\.ide|agents\.md/i.test(file.path))
+                      .map((file) => ({ path: file.path, content: file.content })),
+                  ),
+                  Effect.orElseSucceed(() => [] as Array<{ path: string; content: string }>),
+                )
+              return { output: result.content, path: result.path, relatedRules }
             }).pipe(
-              Effect.map((result) => ({
-                output: result.output,
-                content: toModelContent(result.path, input.offset, result.output),
-                metadata: { truncated: result.output.type === "file" ? false : result.output.truncated },
-              })),
+              Effect.map((result) => {
+                const base = toModelContent(result.path, input.offset, result.output)
+                const content =
+                  typeof base === "string" && result.relatedRules.length > 0
+                    ? `${base}\n\nRelated project rules:\n${result.relatedRules
+                        .map((rule) => `### ${rule.path}\n${rule.content.slice(0, 4000)}`)
+                        .join("\n")}`
+                    : base
+                return {
+                  output: result.output,
+                  content,
+                  metadata: {
+                    truncated: result.output.type === "file" ? false : result.output.truncated,
+                    ...(result.relatedRules.length > 0
+                      ? { relatedRulePaths: result.relatedRules.map((rule) => rule.path) }
+                      : {}),
+                  },
+                }
+              }),
               Effect.mapError((error) => {
                 if (error instanceof ToolFailure) return error
                 const message =

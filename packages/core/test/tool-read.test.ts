@@ -19,6 +19,7 @@ import { ReadTool } from "@opencode/core/tool/plugin/read"
 import { ReadToolFileSystem } from "@opencode/core/tool/read-filesystem"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { SessionInstructions } from "@opencode/core/session/instructions"
+import { InstructionDiscovery } from "@opencode/core/instruction-discovery"
 import { Environment } from "@opencode/core/environment/index"
 import { testEffect } from "./lib/effect"
 import { permissionLayer } from "./lib/permission"
@@ -34,9 +35,16 @@ const readToolNode = makeLocationNode({
     Image.node,
     Permission.node,
     SessionInstructions.node,
+    InstructionDiscovery.node,
     FSUtil.node,
     Location.node,
   ],
+})
+
+const discoveryStub = Layer.mock(InstructionDiscovery.Service, {
+  project: true,
+  global: true,
+  list: () => Effect.succeed([]),
 })
 
 const assertions: Permission.AssertInput[] = []
@@ -125,6 +133,7 @@ const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
       Image.node.replace(imageLayer),
       FSUtil.node.replace(testFileSystem),
       Location.node.replace(locationLayer),
+      InstructionDiscovery.node.replace(discoveryStub),
       Global.node.replace(Global.layerWith({ data: Global.Path.data })),
     ]),
     // Merge by reference so Config.Test and Image.Service resolve to the memoized instances.

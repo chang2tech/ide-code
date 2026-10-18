@@ -18,6 +18,7 @@ import { Permission } from "@opencode/core/permission"
 import { Project } from "@opencode/core/project"
 import { Provider } from "@opencode/core/provider"
 import { ReadTool } from "@opencode/core/tool/plugin/read"
+import { InstructionDiscovery } from "@opencode/core/instruction-discovery"
 import { ReadToolFileSystem } from "@opencode/core/tool/read-filesystem"
 import { SessionEvent } from "@opencode/core/session/event"
 import { SessionExecution } from "@opencode/core/session/execution"
@@ -46,9 +47,16 @@ const readToolNode = makeLocationNode({
     Image.node,
     Permission.node,
     SessionInstructions.node,
+    InstructionDiscovery.node,
     FSUtil.node,
     Location.node,
   ],
+})
+
+const discoveryStub = Layer.mock(InstructionDiscovery.Service, {
+  project: true,
+  global: true,
+  list: () => Effect.succeed([]),
 })
 
 const permission = permissionLayer({ assert: () => Effect.void })
@@ -80,6 +88,7 @@ const testLayer = AppNodeBuilder.build(
     Permission.node.replace(permission),
     Config.node.replace(config),
     Image.node.replace(imageLayer),
+    InstructionDiscovery.node.replace(discoveryStub),
   ],
 )
 

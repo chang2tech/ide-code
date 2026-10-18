@@ -68,6 +68,16 @@ import { Snapshot } from "../snapshot.js"
 import { Skill } from "../skill.js"
 import { SkillDiscovery } from "../skill/discovery.js"
 import { Watcher } from "../filesystem/watcher.js"
+import { DeleteTool } from "../tool/plugin/delete.js"
+import { GoalTool } from "../tool/plugin/goal.js"
+import { PlanTool } from "../tool/plugin/plan.js"
+import { SwitchModeTool } from "../tool/plugin/switchmode.js"
+import { TodoTool } from "../tool/plugin/todo.js"
+import { TrackedTaskTool } from "../tool/plugin/trackedtask.js"
+import { LsTool } from "../tool/plugin/ls.js"
+import { CommunicateTool } from "../tool/plugin/communicate.js"
+import { SummaryTool } from "../tool/plugin/summary.js"
+import { AwaitTool } from "../tool/plugin/await.js"
 import { PatchTool } from "../tool/plugin/patch.js"
 import { EditTool } from "../tool/plugin/edit.js"
 import { GlobTool } from "../tool/plugin/glob.js"
@@ -91,6 +101,8 @@ import BrowserPlugin from "@opencode/plugin-browser"
 import { CommandPlugin } from "./command.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
+import { PolicyEngine } from "../policy-engine/service.js"
+import { PolicyEnginePlugin } from "../policy-engine/plugin.js"
 import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
 import { ProviderPlugins } from "./provider.js"
@@ -135,6 +147,7 @@ const services = [
   Mcp.Service,
   Npm.Service,
   Permission.Service,
+  PolicyEngine.Service,
   Form.Service,
   ReadToolFileSystem.Service,
   Reference.Service,
@@ -189,6 +202,7 @@ export const requirements = LayerNode.group([
   Mcp.node,
   Npm.node,
   Permission.node,
+  PolicyEngine.node,
   Form.node,
   ReadToolFileSystem.node,
   Reference.node,
@@ -215,6 +229,7 @@ export type InternalPlugin = Plugin<Requirements | Scope.Scope>
 
 const pre = [
   ToolInputRepairPlugin.Plugin,
+  PolicyEnginePlugin.Plugin,
   ConfigWorktreePlugin.Plugin,
   ConfigMcpPlugin.Plugin,
   McpCodeModeDefaultsPlugin.Plugin,
@@ -228,7 +243,17 @@ const pre = [
   ModelsDevPlugin,
   ...ProviderPlugins,
   ...WebSearchPlugins,
+  DeleteTool.Plugin,
+  GoalTool.Plugin,
   PatchTool.Plugin,
+  PlanTool.Plugin,
+  SwitchModeTool.Plugin,
+  TodoTool.Plugin,
+  TrackedTaskTool.Plugin,
+  LsTool.Plugin,
+  CommunicateTool.Plugin,
+  SummaryTool.Plugin,
+  AwaitTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,
   VerbosityPlugin.Plugin,
