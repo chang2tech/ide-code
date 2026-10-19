@@ -172,9 +172,11 @@ export const redirectSafety = (command: string, workspace: string): RedirectSafe
   if (pipeWriter) return { safe: false, reason: `pipe into file-writing program: ${pipeWriter[1]}` }
   if (/\|\s*&?\s*dd\b[^|]*\bof=/.test(command))
     return { safe: false, reason: "pipe into dd with of= (file write)" }
-  // fd-prefixed and merged redirects: 2>, 1>>, &>, >&, |& target. The \d
-  // alternative catches `2>` (a bare digit is an fd, not part of a word).
-  const redirect = /(^|[\s;|&]|\d)(>{1,2}|&>|>&)\s*(\S+)/.exec(command)
+  // fd-prefixed and merged redirects: 2>, 1>>, &>, >&, |& target. The \w
+  // alternative catches both `2>` (fd) and `word>` with no space (e.g.
+  // `echo x>/etc/motd`) — comparison operators like `>=`, `=>`, `->` have
+  // no word char directly before `>`, so they still do not match.
+  const redirect = /(^|[\s;|&]|\w)(>{1,2}|&>|>&)\s*(\S+)/.exec(command)
   if (redirect) {
     const target = redirect[3]
     if (target.startsWith("/etc/") || target.startsWith("/usr/") || target.startsWith("/bin/"))

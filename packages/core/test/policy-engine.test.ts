@@ -432,3 +432,49 @@ describe("QA-03-VERIFY regression: URL-embedded credentials are scrubbed", () =>
     expect(LogRedaction.scrubCommandSecrets("echo contact foo@bar.com")).toBe("echo contact foo@bar.com")
   })
 })
+
+describe("QA-03-VERIFY2 regression: no-space redirects are detected", () => {
+  test("word>target without space is detected", () => {
+    expect(CommandMatcher.redirectSafety("echo x>/etc/motd", "/repo").safe).toBe(false)
+    expect(CommandMatcher.redirectSafety("echo x>/tmp/evil", "/repo").safe).toBe(false)
+    expect(CommandMatcher.redirectSafety("echo x>~/evil", "/repo").safe).toBe(false)
+  })
+
+  test("no-space redirect to relative file stays auto-safe", () => {
+    expect(CommandMatcher.redirectSafety("echo x>out.txt", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("echo x >> out.txt", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("echo a>b", "/repo").safe).toBe(true)
+  })
+
+  test("comparison operators are not redirects", () => {
+    expect(CommandMatcher.redirectSafety("a >= b", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("x=>y", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("a->b", "/repo").safe).toBe(true)
+  })
+
+  test("fd redirects still behave as before", () => {
+    expect(CommandMatcher.redirectSafety("cmd 2>err.log", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("cmd 2>&1", "/repo").safe).toBe(true)
+    expect(CommandMatcher.redirectSafety("echo x>&2", "/repo").safe).toBe(true)
+  })
+})
+
+describe("QA-03-VERIFY2 regression: URL userinfo edge cases are scrubbed", () => {
+  test("@ inside the password is fully redacted", () => {
+    const out = LogRedaction.scrubCommandSecrets("curl https://user:p@ss@host/path")
+    expect(out).not.toContain("p@ss")
+    expect(out).not.toContain("ss@host")
+    expect(out).toBe("curl https://[REDACTED]host/path")
+  })
+
+  test("non-http(s) schemes are scrubbed", () => {
+    const ftp = LogRedaction.scrubCommandSecrets("wget ftp://user:pass@files.example.com/f.bin")
+    expect(ftp).not.toContain("user")
+    expect(ftp).not.toContain("pass")
+    expect(ftp).toBe("wget ftp://[REDACTED]files.example.com/f.bin")
+
+    const ssh = LogRedaction.scrubCommandSecrets("git clone ssh://git:s3cret@git.example.com/org/repo.git")
+    expect(ssh).not.toContain("s3cret")
+    expect(ssh).toBe("git clone ssh://[REDACTED]git.example.com/org/repo.git")
+  })
+})
