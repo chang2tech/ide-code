@@ -5,6 +5,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, Option, Schema } from "effect"
 import { KV } from "../../kv.js"
 import { Location } from "../../location.js"
+import { Permission } from "../../permission.js"
 
 // Tracked tasks: Linear-style project tasks (docs/rea/deep-agent-tools.md §3.4).
 // Longer-lived than session todos; scoped to the workspace directory.
@@ -85,6 +86,7 @@ export const Plugin = {
   effect: Effect.fn("TrackedTaskTool.Plugin")(function* (ctx: Context) {
     const kv = yield* KV.Service
     const location = yield* Location.Service
+    const permission = yield* Permission.Service
 
     const scope = () => `trackedtask:${location.directory}`
     const taskKey = (key: string) => `${scope()}:task:${key}`
@@ -129,6 +131,13 @@ export const Plugin = {
     const toFailure = (message: string) => (error: unknown) =>
       error instanceof ToolFailure ? error : new ToolFailure({ message, error })
 
+    // P2 (QA-05): validate client_ref charset/length (used raw in KV keys).
+    const CLIENT_REF_RE = /^[a-zA-Z0-9][a-zA-Z0-9-_]{0,63}$/
+    const checkClientRef = (ref: string | undefined): Effect.Effect<void, ToolFailure> =>
+      ref === undefined || CLIENT_REF_RE.test(ref)
+        ? Effect.void
+        : Effect.fail(new ToolFailure({ message: `Invalid client_ref: ${ref} (alphanumeric, dash, underscore, max 64 chars)` }))
+
     yield* ctx.tool
       .transform((editor) =>
         editor.add({
@@ -139,12 +148,24 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              // P1 (QA-05): project-level task mutations need authorization.
+              // list is read-only and stays open.
+              if (input.action !== "list") {
+                yield* permission.assert({
+                  action: name,
+                  resources: [scope()],
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source: { type: "tool" as const, messageID: context.messageID, id: context.id },
+                })
+              }
               switch (input.action) {
                 case "create": {
                   const statuses = yield* loadStatuses()
                   const ids = statusIds(statuses)
                   const created: Array<typeof Task.Type> = []
                   for (const item of input.tasks ?? []) {
+                    yield* checkClientRef(item.client_ref)
                     const key = item.client_ref ?? `task-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`
                     const existing = yield* loadTask(key)
                     if (existing !== undefined)
@@ -228,6 +249,15 @@ export const Plugin = {
                 }
                 case "update_statuses": {
                   const next = [...(input.statuses ?? [])]
+                  // P2 (QA-05): don't orphan tasks by removing statuses they use.
+                  const tasks = yield* listTasks(input)
+                  const nextIds = new Set(next.map((s) => s.id))
+                  const orphaned = tasks.filter((t) => !nextIds.has(t.status))
+                  if (orphaned.length > 0) {
+                    return yield* new ToolFailure({
+                      message: `Cannot remove statuses in use by ${orphaned.length} task(s): ${[...new Set(orphaned.map((t) => t.status))].join(", ")}`,
+                    })
+                  }
                   yield* kv.set(statusesKey(), next)
                   return {
                     output: { statuses: next, message: `Registered ${next.length} status(es).` },

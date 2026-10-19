@@ -4,6 +4,7 @@ import { ToolFailure } from "@opencode/ai"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, Schema } from "effect"
 import { Job } from "../../job.js"
+import { Permission } from "../../permission.js"
 
 // await: wait for a background subagent job to finish
 // (docs/rea/deep-agent-tools.md §3.4 await_tool_call).
@@ -31,6 +32,7 @@ export const Plugin = {
   id: "opencode.tool.await",
   effect: Effect.fn("AwaitTool.Plugin")(function* (ctx: Context) {
     const jobs = yield* Job.Service
+    const permission = yield* Permission.Service
 
     yield* ctx.tool
       .transform((editor) =>
@@ -42,6 +44,15 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              // P1 (QA-05): awaiting another session's job leaks lifecycle info
+              // and needs authorization.
+              yield* permission.assert({
+                action: name,
+                resources: [input.sessionID],
+                sessionID: context.sessionID,
+                agent: context.agent,
+                source: { type: "tool", messageID: context.messageID, id: context.id },
+              })
               const result = yield* jobs.block({ id: input.sessionID, sessionID: context.sessionID })
               if (result === undefined)
                 return yield* new ToolFailure({ message: `No background job found for session: ${input.sessionID}` })

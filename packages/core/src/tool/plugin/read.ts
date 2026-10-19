@@ -5,6 +5,7 @@ import { basename, dirname, join } from "path"
 import { ToolFailure } from "@opencode/ai"
 import { Effect, Schema } from "effect"
 import { FSUtil } from "@opencode/util/fs-util"
+import { Global } from "@opencode/util/global"
 import { Location } from "../../location.js"
 import { FileAccess } from "../../file-access.js"
 import { SessionInstructions } from "../../session/instructions.js"
@@ -36,6 +37,7 @@ export const Plugin = {
     const discovery = yield* InstructionDiscovery.Service
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
+    const globalHome = Global.Path.home
 
     yield* ctx.tool
       .transform((editor) =>
@@ -116,15 +118,25 @@ export const Plugin = {
               // Wire contract (ReadToolSuccess): every read attaches applicable project
               // rules (related_cursor_rule_paths + related_cursor_rules). Our discovery
               // model carries no globs, so "applicable" = discovered project rule files.
+              // P2 (QA-05): cap count and size to avoid context pollution; label origin
+              // so the model can distinguish project vs global rules.
+              const MAX_RULES = 10
+              const MAX_RULE_CHARS = 4000
               const relatedRules = yield* discovery
                 .list()
                 .pipe(
                   Effect.map((files) =>
                     (Array.isArray(files) ? files : [])
                       .filter((file) => /rules|\.cursor|\.ide|agents\.md/i.test(file.path))
-                      .map((file) => ({ path: file.path, content: file.content })),
+                      .slice(0, MAX_RULES)
+                      .map((file) => ({
+                        path: file.path,
+                        content: file.content.slice(0, MAX_RULE_CHARS),
+                        // Heuristic provenance: paths under home are global, else project.
+                        origin: file.path.startsWith(globalHome) ? "global" : "project",
+                      })),
                   ),
-                  Effect.orElseSucceed(() => [] as Array<{ path: string; content: string }>),
+                  Effect.orElseSucceed(() => [] as Array<{ path: string; content: string; origin: string }>),
                 )
               return { output: result.content, path: result.path, relatedRules }
             }).pipe(
@@ -133,7 +145,7 @@ export const Plugin = {
                 const content =
                   typeof base === "string" && result.relatedRules.length > 0
                     ? `${base}\n\nRelated project rules:\n${result.relatedRules
-                        .map((rule) => `### ${rule.path}\n${rule.content.slice(0, 4000)}`)
+                        .map((rule) => `### ${rule.path} [${rule.origin}]\n${rule.content}`)
                         .join("\n")}`
                     : base
                 return {

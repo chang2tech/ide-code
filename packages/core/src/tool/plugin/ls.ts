@@ -44,15 +44,27 @@ export const Plugin = {
               const target = yield* access.resolve({ path: input.path }).pipe(
                 Effect.mapError((error) => new ToolFailure({ message: `Cannot list: ${input.path}`, error })),
               )
+              // P1 (QA-05): listing outside the workspace needs authorization,
+              // mirroring read.ts which calls authorizeRead.
+              yield* access.authorizeExternal([target], context).pipe(
+                Effect.mapError((error) => new ToolFailure({ message: `Cannot list: ${input.path}`, error })),
+              )
               const entries = yield* fs.readDirectoryEntries(target.absolute).pipe(
                 Effect.mapError((error) => new ToolFailure({ message: `Cannot list directory: ${input.path}`, error })),
               )
+              // P1: cap entries so a huge directory can't blow up memory/context.
+              const MAX_ENTRIES = 5000
+              const truncated = entries.length > MAX_ENTRIES
               const names = entries
+                .slice(0, MAX_ENTRIES)
                 .map((entry) => `${entry.name}${entry.type === "directory" ? "/" : ""}`)
                 .sort()
               return {
                 output: { path: input.path, entries: names },
-                content: names.length === 0 ? `Directory ${input.path} is empty.` : names.join("\n"),
+                content:
+                  names.length === 0
+                    ? `Directory ${input.path} is empty.`
+                    : names.join("\n") + (truncated ? `\n…[truncated, ${entries.length} total entries]` : ""),
                 metadata: {},
               }
             }).pipe(

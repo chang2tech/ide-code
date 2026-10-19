@@ -44,6 +44,10 @@ export const Output = Schema.Struct({
 const prefix = "goal:"
 const key = (id: string) => `${prefix}${id}`
 
+// P2 (QA-05): bound title/description length to prevent KV bloat.
+const MAX_GOAL_TITLE_CHARS = 200
+const MAX_GOAL_DESCRIPTION_CHARS = 10_000
+
 const slug = (title: string) =>
   title
     .toLowerCase()
@@ -113,13 +117,22 @@ export const Plugin = {
                 case "create": {
                   if (!input.title || !input.description)
                     return yield* new ToolFailure({ message: "create needs title and description" })
-                  const id = `${slug(input.title)}-${now.toString(36)}`
+                  if (input.title.length > MAX_GOAL_TITLE_CHARS)
+                    return yield* new ToolFailure({ message: `Title too long (max ${MAX_GOAL_TITLE_CHARS} chars)` })
+                  if (input.description.length > MAX_GOAL_DESCRIPTION_CHARS)
+                    return yield* new ToolFailure({ message: `Description too long (max ${MAX_GOAL_DESCRIPTION_CHARS} chars)` })
+                  // P2: random suffix avoids same-millisecond slug collisions.
+                  const id = `${slug(input.title)}-${now.toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
                   const goal = { id, title: input.title, description: input.description, status: "active" as const, createdAt: now, updatedAt: now }
                   yield* kv.set(key(id), goal)
                   return { output: { goal }, content: `Goal created: ${id}`, metadata: {} }
                 }
                 case "update": {
                   if (!input.id) return yield* new ToolFailure({ message: "update needs id" })
+                  if (input.title !== undefined && input.title.length > MAX_GOAL_TITLE_CHARS)
+                    return yield* new ToolFailure({ message: `Title too long (max ${MAX_GOAL_TITLE_CHARS} chars)` })
+                  if (input.description !== undefined && input.description.length > MAX_GOAL_DESCRIPTION_CHARS)
+                    return yield* new ToolFailure({ message: `Description too long (max ${MAX_GOAL_DESCRIPTION_CHARS} chars)` })
                   const existing = yield* load(input.id)
                   const goal = {
                     ...existing,

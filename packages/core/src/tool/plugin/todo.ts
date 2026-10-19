@@ -39,6 +39,10 @@ export const Output = Schema.Struct({
 
 const key = (sessionID: string) => `todo:${sessionID}`
 
+// P2 (QA-05): bound list size and item length to prevent KV/context bloat.
+const MAX_TODOS = 100
+const MAX_TODO_CONTENT_CHARS = 2_000
+
 const Stored = Schema.Array(
   Schema.Struct({
     content: Schema.String,
@@ -91,6 +95,14 @@ export const Plugin = {
               }
               if (input.todos === undefined)
                 return yield* new ToolFailure({ message: "set needs todos" })
+              if (input.todos.length > MAX_TODOS)
+                return yield* new ToolFailure({ message: `At most ${MAX_TODOS} todos` })
+              for (const t of input.todos) {
+                if (t.content.length > MAX_TODO_CONTENT_CHARS)
+                  return yield* new ToolFailure({
+                    message: `Todo content too long (max ${MAX_TODO_CONTENT_CHARS} chars): ${t.content.slice(0, 50)}…`,
+                  })
+              }
               const inProgress = input.todos.filter((t) => t.status === "in_progress")
               if (inProgress.length > 1)
                 return yield* new ToolFailure({ message: "At most one todo may be in_progress" })

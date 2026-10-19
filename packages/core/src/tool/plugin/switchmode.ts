@@ -81,6 +81,8 @@ export const Plugin = {
       Effect.gen(function* () {
         const tool = event.tools[name]
         if (!tool) return
+        // P2 (QA-05): guard against re-appending on repeated hook invocations.
+        if (tool.description.includes("Available modes:")) return
         const available = (yield* agents.list()).filter(
           (agent) => agent.mode === "primary" && !agent.hidden,
         )
