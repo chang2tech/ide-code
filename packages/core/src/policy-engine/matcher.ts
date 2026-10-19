@@ -29,7 +29,9 @@ const tokenize = (command: string): string[] => {
       quote = ch
       continue
     }
-    if (ch === " " || ch === "\t") {
+    // Newlines are command separators (see buildDecisionFacts); treat them as
+    // whitespace so a directly-parsed multi-line command still tokenizes sanely.
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
       if (current !== "") {
         tokens.push(current)
         current = ""
@@ -146,12 +148,17 @@ const unwrapOneLevel = (parsed: ParsedCommand): ParsedCommand | undefined => {
   return undefined
 }
 
+// Commands whose primary purpose is deleting or destroying file contents:
+// rm, unlink (delete), shred/wipe (secure delete), truncate (destroy contents),
+// rmdir (delete empty dir).
+const DELETE_COMMANDS = new Set(["rm", "unlink", "shred", "wipe", "truncate", "rmdir"])
+
 // True when the command deletes files, after normalizing path-qualified names
 // (/bin/rm), unwrapping command/env/sudo/sh -c indirection, and recognizing
 // `find … -delete` (which contains no rm token at all).
 export const isDeleteOperation = (parsed: ParsedCommand): boolean => {
   const name = normalizedName(parsed)
-  if (name === "rm") return true
+  if (DELETE_COMMANDS.has(name)) return true
   if (name === "find" && parsed.args.includes("-delete")) return true
   const inner = unwrapOneLevel(parsed)
   if (inner !== undefined) return isDeleteOperation(inner)

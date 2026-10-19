@@ -478,3 +478,81 @@ describe("QA-03-VERIFY2 regression: URL userinfo edge cases are scrubbed", () =>
     expect(ssh).toBe("git clone ssh://[REDACTED]git.example.com/org/repo.git")
   })
 })
+
+describe("DEV-FIX-XQA2 regression: newline command separators are split", () => {
+  const protectedPolicy: EffectivePolicy = { ...basePolicy, deleteFileProtection: true }
+
+  test("newline-separated dangerous command is denied", () => {
+    const facts = decide(["echo hello\nrm -rf ~"], protectedPolicy)
+    expect(facts.some((f) => f.state === "denied")).toBe(true)
+  })
+
+  test("newline bypass fails even without delete protection (classifier BLOCK)", () => {
+    const facts = decide(["echo hello\nrm -rf ~"])
+    expect(facts.some((f) => f.state === "denied")).toBe(true)
+  })
+
+  test("CRLF and lone CR are also separators", () => {
+    const crlf = decide(["echo a\r\nrm -rf ~"], protectedPolicy)
+    expect(crlf.some((f) => f.state === "denied")).toBe(true)
+    const cr = decide(["echo a\rrm -rf ~"], protectedPolicy)
+    expect(cr.some((f) => f.state === "denied")).toBe(true)
+  })
+
+  test("all-safe multiline command stays auto", () => {
+    const facts = decide(["echo a\necho b"])
+    expect(facts).toHaveLength(2)
+    expect(facts.every((f) => f.state === "auto")).toBe(true)
+  })
+
+  test("tokenizer treats newlines as whitespace", () => {
+    const parsed = CommandMatcher.parse("ls\n-la")
+    expect(parsed.name).toBe("ls")
+    expect(parsed.args).toEqual(["-la"])
+  })
+})
+
+describe("DEV-FIX-XQA2 regression: redirectSafety on the classifier path", () => {
+  test("unsafe redirect without allowlist is approvable, not auto", () => {
+    const facts = decide(["echo x > /etc/motd"])
+    expect(facts).toHaveLength(1)
+    expect(facts[0].state).toBe("approvable")
+    expect(facts[0].reasons.join(" ")).toContain("Redirect")
+  })
+
+  test("safe redirect without allowlist stays auto", () => {
+    const facts = decide(["echo x > out.txt"])
+    expect(facts).toHaveLength(1)
+    expect(facts[0].state).toBe("auto")
+  })
+
+  test("unsafe redirect with allowlist is still approvable", () => {
+    const facts = decide(["echo x > /etc/motd"], { ...basePolicy, terminalAllowlist: ["echo"] })
+    expect(facts).toHaveLength(1)
+    expect(facts[0].state).toBe("approvable")
+  })
+})
+
+describe("DEV-FIX-XQA2 regression: isDeleteOperation covers more delete commands", () => {
+  test("unlink/shred/truncate/rmdir/wipe are delete operations", () => {
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("unlink /etc/passwd"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("shred -u /tmp/secret"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("truncate -s 0 /etc/passwd"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("rmdir /tmp/dir"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("wipe /tmp/secret"))).toBe(true)
+  })
+
+  test("delete protection denies them when enabled", () => {
+    const protectedPolicy: EffectivePolicy = { ...basePolicy, deleteFileProtection: true }
+    for (const cmd of ["unlink /etc/passwd", "shred -u /tmp/secret", "truncate -s 0 /x", "rmdir /tmp/d"]) {
+      const facts = decide([cmd], protectedPolicy)
+      expect(facts[0].state).toBe("denied")
+    }
+  })
+
+  test("non-delete commands are unaffected", () => {
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("ls -la"))).toBe(false)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("touch file"))).toBe(false)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("find . -name x"))).toBe(false)
+  })
+})

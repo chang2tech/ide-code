@@ -68,9 +68,12 @@ export const buildDecisionFacts = (
 ): Effect.Effect<ReadonlyArray<CommandDecision>> =>
   Effect.sync(() => {
     // Split shell invocations on command separators for per-command decisions.
+    // Newlines (\n, \r\n, \r) are command separators in `sh -c`: without this,
+    // `echo hi\nrm -rf ~` was judged as one command and auto-allowed via the
+    // first line's verdict, while the shell executed the dangerous line.
     const split = input.commands.flatMap((cmd) =>
       cmd
-        .split(/&&|\|\||;/)
+        .split(/&&|\|\||;|\r\n|[\r\n]/)
         .map((c) => c.trim())
         .filter((c) => c !== ""),
     )
@@ -143,7 +146,14 @@ const decideOne = (command: string, input: GateInput, policy: EffectivePolicy): 
       [result.blockReason ?? "Blocked by command classifier"],
       result.proposedAllowRule,
     )
-  if (result.decision === "ALLOW") return { command, state: "auto", reasons: ["Classifier allow"] }
+  if (result.decision === "ALLOW") {
+    // Redirects are evaluated separately from the command itself: a classifier-
+    // allowed command (echo, cat, …) must not smuggle a redirect to an unsafe
+    // target past the gate. Same check as step 4 (terminal allowlist).
+    const redirect = CommandMatcher.redirectSafety(command, input.workspace)
+    if (!redirect.safe) return approvable([`Redirect needs review: ${redirect.reason}`])
+    return { command, state: "auto", reasons: ["Classifier allow"] }
+  }
 
   // Default: approvable (prompt the user), proposing a precise allow rule.
   const suggested = CommandMatcher.suggestAllowlistEntry(parsed)
