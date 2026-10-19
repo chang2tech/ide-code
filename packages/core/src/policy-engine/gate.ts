@@ -28,6 +28,20 @@ const DANGEROUS = [
   /wget.*\|\s*(sh|bash)/,
 ]
 
+// Unanchored variants for screening the FULL raw text when the command uses
+// shell expansion (or any indirection the tokenizer cannot see through).
+// A match here means the expanded/indirect command is dangerous.
+const DANGEROUS_ANYWHERE = [
+  /\brm\s+(?:-[a-z]*r[a-z]*|--recursive)(?=[\s;|&]|$)/,
+  /\bdd\b[^|]*\bof=\s*\//,
+  /:\(\)\s*\{/, // fork bomb
+  /\bmv\b[^\n;|&]*\s\/(?=\s|$)/,
+  /chmod\s+-R\s+777/,
+  /curl.*\|\s*(sh|bash)/,
+  /wget.*\|\s*(sh|bash)/,
+  /\b(mkfs|shutdown|reboot|halt|poweroff)\b/,
+]
+
 const READONLY_SAFE = /^(ls|pwd|echo|cat|head|tail|wc|date|whoami|which|git\s+(status|log|diff|branch))\b/
 
 export const classify = (parsed: ParsedCommand): ClassifierResult => {
@@ -82,9 +96,21 @@ const decideOne = (command: string, input: GateInput, policy: EffectivePolicy): 
   if (policy.adminCommandDenylist.some((entry) => CommandMatcher.matchesEntry(entry, parsed)))
     return deny([`Blocked by admin denylist`])
 
-  // 2. Delete-file protection: hard-deny rm.
-  if (policy.deleteFileProtection && parsed.name === "rm")
+  // 2. Delete-file protection: hard-deny rm in any spelling — path-qualified
+  // (/bin/rm), wrapped (command/env/sudo/sh -c), ANSI-C quoted ($'rm'),
+  // and find … -delete.
+  if (policy.deleteFileProtection && CommandMatcher.isDeleteOperation(parsed))
     return deny(["Delete-file protection is on: rm is denied; use the delete tool"])
+
+  // 2b. Shell expansion: the naive tokenizer cannot see through $(...),
+  // backticks, ${...} or <(...). NEVER auto-allow these; screen the full
+  // raw text for danger first. Runs before the allowlist so an allowlisted
+  // `echo` cannot smuggle `$(rm -rf ~)` past the gate.
+  if (CommandMatcher.hasShellExpansion(command)) {
+    if (DANGEROUS_ANYWHERE.some((re) => re.test(command)))
+      return deny(["Shell expansion hides a dangerous operation"])
+    return approvable(["Command uses shell expansion; requires review"])
+  }
 
   // 3. Sandbox read-only guard: never escalate to read-write mid-session.
   if (policy.sandboxPolicyType === "workspace_readonly" && input.requestedSandbox === "workspace_readwrite")

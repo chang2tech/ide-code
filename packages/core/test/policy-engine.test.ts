@@ -168,3 +168,150 @@ describe("ApprovalGate", () => {
     expect(ApprovalGate.resolveApprovable(facts[0], "manual")).toBe("approvable")
   })
 })
+
+describe("QA-03 P0 regression: command-substitution bypass", () => {
+  test("echo $(rm -rf ~) is denied, not auto-allowed via echo", () => {
+    const facts = decide(["echo $(rm -rf ~)"])
+    expect(facts[0].state).toBe("denied")
+  })
+
+  test("backtick form is denied too", () => {
+    const facts = decide(["echo `rm -rf ~`"])
+    expect(facts[0].state).toBe("denied")
+  })
+
+  test("benign substitution is approvable, never auto", () => {
+    const facts = decide(["echo $(date)"], { ...basePolicy, terminalAllowlist: ["echo *"] })
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("${HOME} expansion is approvable, never auto", () => {
+    const facts = decide(["echo ${HOME}"], { ...basePolicy, terminalAllowlist: ["echo *"] })
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("single-quoted $(...) is literal and stays auto-allowable", () => {
+    const facts = decide(["echo '$(rm -rf ~)'"], { ...basePolicy, terminalAllowlist: ["echo *"] })
+    expect(facts[0].state).toBe("auto")
+  })
+})
+
+describe("QA-03 P0 regression: path-qualified rm bypass", () => {
+  const protectedPolicy = { ...basePolicy, deleteFileProtection: true }
+
+  test("/bin/rm is denied", () => {
+    expect(decide(["/bin/rm -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("command rm is denied", () => {
+    expect(decide(["command rm -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("env rm is denied", () => {
+    expect(decide(["env FOO=bar rm -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("sudo rm is denied", () => {
+    expect(decide(["sudo rm -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("sh -c 'rm …' is denied", () => {
+    expect(decide(["sh -c 'rm -rf /tmp/x'"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("bash -c \"rm …\" is denied", () => {
+    expect(decide(['bash -c "rm -rf /tmp/x"'], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("$'rm' ANSI-C quoting is denied", () => {
+    expect(decide(["$'rm' -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("find … -delete is denied as a delete operation", () => {
+    expect(decide(["find /tmp -name '*.log' -delete"], protectedPolicy)[0].state).toBe("denied")
+  })
+
+  test("plain rm still denied", () => {
+    expect(decide(["rm -rf /tmp/x"], protectedPolicy)[0].state).toBe("denied")
+  })
+})
+
+describe("QA-03 P1 regression: redirect/pipe-to-file bypass", () => {
+  const allowEcho = { ...basePolicy, terminalAllowlist: ["echo *"] }
+
+  test("pipe to tee is approvable, not auto", () => {
+    const facts = decide(["echo pwned | tee /etc/cron.d/x"], allowEcho)
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("fd redirect 2> is approvable, not auto", () => {
+    const facts = decide(["echo x 2>/tmp/evil"], allowEcho)
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("merged redirect &> is approvable, not auto", () => {
+    const facts = decide(["echo x &>/tmp/evil"], allowEcho)
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("plain relative redirect stays auto", () => {
+    const facts = decide(["echo hi > out.txt"], allowEcho)
+    expect(facts[0].state).toBe("auto")
+  })
+
+  test("redirect to /dev/null stays auto", () => {
+    const facts = decide(["echo hi 2>/dev/null"], allowEcho)
+    expect(facts[0].state).toBe("auto")
+  })
+})
+
+describe("QA-03 P1 regression: secret scrubbing in logs", () => {
+  test("Bearer tokens are scrubbed", () => {
+    const out = LogRedaction.scrubCommandSecrets('curl -H "Authorization: Bearer abc123XYZ789" https://x')
+    expect(out).not.toContain("abc123XYZ789")
+    expect(out).toContain("Bearer [REDACTED]")
+  })
+
+  test("--password= values are scrubbed", () => {
+    const out = LogRedaction.scrubCommandSecrets("deploy --password=s3cr3t --user bob")
+    expect(out).not.toContain("s3cr3t")
+    expect(out).toContain("--password=[REDACTED]")
+    expect(out).toContain("--user bob")
+  })
+
+  test("exported secret env vars are scrubbed", () => {
+    const out = LogRedaction.scrubCommandSecrets("export AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
+    expect(out).not.toContain("AKIAIOSFODNN7EXAMPLE")
+    expect(out).toContain("[REDACTED]")
+  })
+
+  test("ordinary commands pass through untouched", () => {
+    expect(LogRedaction.scrubCommandSecrets("ls -la /tmp")).toBe("ls -la /tmp")
+    expect(LogRedaction.scrubCommandSecrets(undefined)).toBe(undefined)
+  })
+})
+
+describe("QA-03 matcher unit checks", () => {
+  test("hasShellExpansion detects $(, backticks, ${, <(", () => {
+    expect(CommandMatcher.hasShellExpansion("echo $(date)")).toBe(true)
+    expect(CommandMatcher.hasShellExpansion("echo `date`")).toBe(true)
+    expect(CommandMatcher.hasShellExpansion("echo ${HOME}")).toBe(true)
+    expect(CommandMatcher.hasShellExpansion("diff <(ls a) <(ls b)")).toBe(true)
+    expect(CommandMatcher.hasShellExpansion("echo '$(date)'")).toBe(false)
+    expect(CommandMatcher.hasShellExpansion("ls -la")).toBe(false)
+  })
+
+  test("normalizedName basenames path-qualified commands", () => {
+    expect(CommandMatcher.normalizedName(CommandMatcher.parse("/bin/rm -rf x"))).toBe("rm")
+    expect(CommandMatcher.normalizedName(CommandMatcher.parse("/usr/bin/find ."))).toBe("find")
+  })
+
+  test("isDeleteOperation covers wrappers and find -delete", () => {
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("rm -rf x"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("/bin/rm -rf x"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("sh -c 'rm -rf x'"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("find . -delete"))).toBe(true)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("find . -name x"))).toBe(false)
+    expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("ls -la"))).toBe(false)
+  })
+})

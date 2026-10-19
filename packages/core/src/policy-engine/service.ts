@@ -4,6 +4,7 @@ import { Context, Effect, Layer } from "effect"
 import { ToolFailure } from "@opencode/ai"
 import { Global } from "@opencode/util/global"
 import { makeGlobalNode } from "@opencode/util/effect/app-node"
+import path from "path"
 import { PolicyLoader, type EffectivePolicy } from "./loader.js"
 import { ApprovalGate } from "./gate.js"
 import { CommandMatcher } from "./matcher.js"
@@ -65,25 +66,44 @@ const logDecision = (input: GateInput, verdict: Verdict) => {
     tool: { value: input.tool, classification: PolicyLogFields.tool },
     sessionID: { value: input.sessionID, classification: PolicyLogFields.sessionID },
     decision: { value: verdict.kind, classification: PolicyLogFields.decision },
-    command: { value: field(input.input, "command"), classification: PolicyLogFields.command },
+    // CODE classification truncates but never redacts: scrub secret-shaped
+    // substrings (Bearer tokens, --password=, Authorization headers) first.
+    command: {
+      value: LogRedaction.scrubCommandSecrets(field(input.input, "command")),
+      classification: PolicyLogFields.command,
+    },
     path: { value: field(input.input, "path"), classification: PolicyLogFields.path },
   })
   return Effect.logDebug("[policy-engine]", redacted)
 }
 
+// Mirror FileAccess.resolvePath: expand a leading ~ and resolve against the
+// session directory so the visibility check always runs on an absolute path.
+const resolveInputPath = (directory: string, input: string): string => {
+  const home = Global.Path.home
+  const expanded =
+    input === "~" ? home : input.startsWith("~/") ? path.join(home, input.slice(2)) : input
+  return path.resolve(directory, expanded)
+}
+
+// Policy/ignore cache TTL: reload() exists but nothing called it, so mid-session
+// edits to .ideignore/permissions.json never took effect. A 30s TTL bounds the
+// staleness without file watchers.
+const CACHE_TTL_MS = 30_000
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const cache = new Map<string, { policy: EffectivePolicy; ignore: IgnorePolicy.Compiled }>()
+    const cache = new Map<string, { policy: EffectivePolicy; ignore: IgnorePolicy.Compiled; loadedAt: number }>()
     let substrate: SandboxSubstrate = PassthroughSubstrate
 
     const loadAll = (directory: string) =>
       Effect.gen(function* () {
         const cached = cache.get(directory)
-        if (cached) return cached
+        if (cached && Date.now() - cached.loadedAt < CACHE_TTL_MS) return cached
         const policy = yield* PolicyLoader.load({ home: Global.Path.home, workspace: directory })
         const ignore = yield* IgnorePolicy.load(directory)
-        const entry = { policy, ignore }
+        const entry = { policy, ignore, loadedAt: Date.now() }
         cache.set(directory, entry)
         return entry
       })
@@ -94,10 +114,21 @@ const layer = Layer.effect(
     const decide: Interface["decide"] = (input) =>
       Effect.gen(function* () {
         const { policy } = yield* loadAll(input.directory)
-        const sandboxPolicy = policy.sandboxPolicyType ?? "insecure_none"
+        // Secure default: "insecure_none" means no confinement, audit-only.
+        const sandboxPolicy = policy.sandboxPolicyType ?? "workspace_readonly"
 
         const run = (verdict: Verdict): Effect.Effect<Verdict, ToolFailure> =>
           logDecision(input, verdict).pipe(Effect.as(verdict))
+
+        // approvalMode actually gates approvable states (was dead config).
+        const approvable = (reasons: ReadonlyArray<string>): Effect.Effect<Verdict, ToolFailure> => {
+          const state = ApprovalGate.resolveApprovable(
+            { command: "", state: "approvable", reasons: [...reasons] },
+            policy.approvalMode,
+          )
+          if (state === "auto") return run({ kind: "allow" })
+          return run({ kind: "approvable", reasons })
+        }
 
         // Shell: per-command decision facts through the full check order.
         if (SHELL_COMMANDS.has(input.tool)) {
@@ -108,20 +139,18 @@ const layer = Layer.effect(
           )
           const denied = facts.find((f) => f.state === "denied")
           if (denied) return yield* run({ kind: "deny", reasons: denied.reasons })
-          const approvable = facts.find((f) => f.state === "approvable")
-          if (approvable)
-            return yield* run({
-              kind: "approvable",
-              reasons: approvable.reasons,
-            })
+          const needsApproval = facts.find((f) => f.state === "approvable")
+          if (needsApproval) return yield* approvable(needsApproval.reasons)
           return yield* run({ kind: "allow" })
         }
 
-        // File reads: enforce the compiled visibility policy.
+        // File reads: enforce the compiled visibility policy against the
+        // canonical absolute path (tools resolve via FileAccess.resolve; a
+        // relative input must not be checked against process.cwd()).
         if (FILE_READ_TOOLS.has(input.tool)) {
           const target = field(input.input, "path") ?? field(input.input, "target_directory")
           if (target !== undefined) {
-            const visible = yield* isVisible(target, input.directory)
+            const visible = yield* isVisible(resolveInputPath(input.directory, target), input.directory)
             if (!visible) return yield* run({ kind: "deny", reasons: [`Path is hidden by ignore policy: ${target}`] })
           }
           return yield* run({ kind: "allow" })
@@ -132,7 +161,7 @@ const layer = Layer.effect(
         if (FILE_WRITE_TOOLS.has(input.tool)) {
           const target = field(input.input, "path")
           if (target !== undefined) {
-            const visible = yield* isVisible(target, input.directory)
+            const visible = yield* isVisible(resolveInputPath(input.directory, target), input.directory)
             if (!visible) return yield* run({ kind: "deny", reasons: [`Path is hidden by ignore policy: ${target}`] })
           }
           return yield* run({ kind: "allow" })

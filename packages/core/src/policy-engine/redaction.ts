@@ -32,6 +32,26 @@ export const redactValue = (value: unknown, classification: FieldClassification)
   }
 }
 
+// Scrub secret-shaped substrings from free-form command text before logging.
+// Keeps the flag/key name for debuggability, replaces only the secret value.
+// Applied to CODE-classified command text, which truncation alone does not protect.
+const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
+  // Authorization: Bearer <token> / -H "Authorization: Bearer <token>"
+  /(\bbearer\s+)[A-Za-z0-9\-._~+/=]{8,}/gi,
+  // --password=secret, --token <token>, -psecret, "authorization": "…"
+  // (skips `Authorization: Bearer …` — pattern 1 already handled the token)
+  /((?:--?(?:password|passwd|token|secret|api[_-]?key|auth|credential)|["']?authorization["']?)\s*[:=]\s*["']?)((?!bearer\b)[^"'\s;|&]+)/gi,
+  // export AWS_SECRET_ACCESS_KEY=… / SECRET=…
+  /(\bexport\s+[A-Za-z_][A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY)\s*=\s*)([^\s;|&]+)/gi,
+]
+
+export const scrubCommandSecrets = (text: string | undefined): string | undefined => {
+  if (typeof text !== "string" || text === "") return text
+  let out = text
+  for (const re of SECRET_VALUE_PATTERNS) out = out.replace(re, "$1[REDACTED]")
+  return out
+}
+
 // Redact a record of classified fields for safe logging.
 export const redactFields = (fields: Record<string, ClassifiedField>): Record<string, unknown> => {
   const out: Record<string, unknown> = {}

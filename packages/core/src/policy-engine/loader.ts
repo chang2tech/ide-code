@@ -75,7 +75,8 @@ export const load = (input: { home: string; workspace: string }): Effect.Effect<
       approvalMode: pick(team?.approvalMode, project?.approvalMode, user?.approvalMode),
       allowInstructions,
       blockInstructions,
-      deleteFileProtection: pick(team?.deleteFileProtection, project?.deleteFileProtection, user?.deleteFileProtection) ?? false,
+      // Secure default: delete-file protection is ON unless explicitly opted out.
+      deleteFileProtection: pick(team?.deleteFileProtection, project?.deleteFileProtection, user?.deleteFileProtection) ?? true,
       adminCommandDenylist: admin?.adminCommandDenylist ?? [],
       isAdminControlled: admin?.isAdminControlled ?? false,
       sandboxPolicyType: pick(team?.sandboxPolicyType, project?.sandboxPolicyType, user?.sandboxPolicyType),
