@@ -21,6 +21,9 @@ export const Input = Schema.Struct({
   sessionID: Schema.String.annotate({
     description: "The sessionID of the background subagent to wait for.",
   }),
+  timeout: Schema.optionalKey(Schema.Number).annotate({
+    description: "Max seconds to wait for the job before failing. Defaults to 600 (10 minutes).",
+  }),
 })
 
 const Output = Schema.Struct({
@@ -53,7 +56,23 @@ export const Plugin = {
                 agent: context.agent,
                 source: { type: "tool", messageID: context.messageID, id: context.id },
               })
-              const result = yield* jobs.block({ id: input.sessionID, sessionID: context.sessionID })
+              // P2 (QA-04-VERIFY): fail fast on self-await — the caller's own
+              // execution is suspended inside this tool call, so its own job
+              // can never finish; without this the block deadlocks forever.
+              if (input.sessionID === context.sessionID)
+                return yield* new ToolFailure({ message: `Cannot await your own session: ${input.sessionID}` })
+              // P2 (QA-04-VERIFY): bound the block with a timeout. jobs.block
+              // used to race the job's Deferreds with no timeout, so a stuck
+              // subagent hung the parent's tool call indefinitely.
+              const timeoutMs = (input.timeout ?? 600) * 1000
+              const maybe = yield* jobs.block({ id: input.sessionID, sessionID: context.sessionID }).pipe(
+                Effect.timeoutOption(timeoutMs),
+              )
+              if (maybe._tag === "None")
+                return yield* new ToolFailure({
+                  message: `Timed out after ${input.timeout ?? 600}s waiting for background job ${input.sessionID}`,
+                })
+              const result = maybe.value
               if (result === undefined)
                 return yield* new ToolFailure({ message: `No background job found for session: ${input.sessionID}` })
               const status = result.type === "finished" ? "finished" : "backgrounded"
