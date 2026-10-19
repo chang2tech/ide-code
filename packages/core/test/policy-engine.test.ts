@@ -263,6 +263,16 @@ describe("QA-03 P1 regression: redirect/pipe-to-file bypass", () => {
     const facts = decide(["echo hi 2>/dev/null"], allowEcho)
     expect(facts[0].state).toBe("auto")
   })
+
+  test("tilde redirect is approvable, not auto (bash expands ~ to $HOME)", () => {
+    const facts = decide(["echo hi > ~/evil"], allowEcho)
+    expect(facts[0].state).toBe("approvable")
+  })
+
+  test("$HOME redirect is approvable, not auto", () => {
+    const facts = decide(["echo hi > $HOME/evil"], allowEcho)
+    expect(facts[0].state).toBe("approvable")
+  })
 })
 
 describe("QA-03 P1 regression: secret scrubbing in logs", () => {
@@ -370,5 +380,55 @@ describe("QA-03 P2: matcher edge cases", () => {
   test("whitespace-only command through buildDecisionFacts", () => {
     const facts = decide(["   "])
     expect(facts).toEqual([])
+  })
+})
+
+describe("QA-03-VERIFY regression: tilde/$HOME redirect targets are not auto-safe", () => {
+  test("redirect to ~/path is unsafe (bash expands to $HOME)", () => {
+    const result = CommandMatcher.redirectSafety("echo x > ~/evil", "/repo")
+    expect(result.safe).toBe(false)
+    expect(result.reason).toContain("expands outside workspace")
+  })
+
+  test("redirect to bare ~ is unsafe", () => {
+    expect(CommandMatcher.redirectSafety("echo x > ~", "/repo").safe).toBe(false)
+  })
+
+  test("redirect to ~user/path is unsafe", () => {
+    expect(CommandMatcher.redirectSafety("echo x > ~other/x", "/repo").safe).toBe(false)
+  })
+
+  test("redirect to $HOME/path is unsafe", () => {
+    expect(CommandMatcher.redirectSafety("echo x > $HOME/evil", "/repo").safe).toBe(false)
+    expect(CommandMatcher.redirectSafety("echo x > ${HOME}/evil", "/repo").safe).toBe(false)
+  })
+
+  test("literal ./~/dir (not a tilde expansion) stays auto-safe", () => {
+    expect(CommandMatcher.redirectSafety("echo x > ./~/notes.txt", "/repo").safe).toBe(true)
+  })
+})
+
+describe("QA-03-VERIFY regression: URL-embedded credentials are scrubbed", () => {
+  test("https://user:pass@host is redacted", () => {
+    const out = LogRedaction.scrubCommandSecrets("curl https://admin:s3cret@api.example.com/data")
+    expect(out).not.toContain("s3cret")
+    expect(out).not.toContain("admin")
+    expect(out).toContain("https://[REDACTED]api.example.com/data")
+  })
+
+  test("https://token@host (no password) is redacted", () => {
+    const out = LogRedaction.scrubCommandSecrets("git clone https://ghp_abc123@github.com/org/repo.git")
+    expect(out).not.toContain("ghp_abc123")
+    expect(out).toContain("https://[REDACTED]github.com/org/repo.git")
+  })
+
+  test("plain https URL without userinfo passes through", () => {
+    expect(LogRedaction.scrubCommandSecrets("curl https://api.example.com/data")).toBe(
+      "curl https://api.example.com/data"
+    )
+  })
+
+  test("email address without URL scheme is untouched", () => {
+    expect(LogRedaction.scrubCommandSecrets("echo contact foo@bar.com")).toBe("echo contact foo@bar.com")
   })
 })

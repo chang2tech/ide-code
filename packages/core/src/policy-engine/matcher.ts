@@ -182,6 +182,10 @@ export const redirectSafety = (command: string, workspace: string): RedirectSafe
     if (target === "/dev/null") return { safe: true }
     // >&2 / 2>&1 style fd targets are not file writes.
     if (/^\d+$/.test(target) || target === "-") return { safe: true }
+    // Bash expands ~, ~user, and $HOME at redirect time: `> ~/x` writes to the
+    // real home directory, outside the workspace, so it can never be auto-safe.
+    if (/^["']?~/.test(target) || /^["']?\$(?:\{HOME\}|HOME)(?:\/|$)/.test(target))
+      return { safe: false, reason: `redirect target expands outside workspace: ${target}` }
     // Relative targets stay inside the workspace by construction of path resolution.
     if (!target.startsWith("/")) return { safe: true }
     if (!target.startsWith(workspace)) return { safe: false, reason: `redirect target outside workspace: ${target}` }

@@ -38,6 +38,9 @@ export const redactValue = (value: unknown, classification: FieldClassification)
 const SECRET_VALUE_PATTERNS: ReadonlyArray<RegExp> = [
   // Authorization: Bearer <token> / -H "Authorization: Bearer <token>"
   /(\bbearer\s+)[A-Za-z0-9\-._~+/=]{8,}/gi,
+  // https://user:pass@host — URL-embedded credentials (curl, git, wget);
+  // the whole userinfo is dropped, leaving https://[REDACTED]host/…
+  /(https?:\/\/)(?:[^\/\s:@]+:)?[^\/\s@]+@/gi,
   // --password=secret, --token <token>, -psecret, "authorization": "…"
   // (skips `Authorization: Bearer …` — pattern 1 already handled the token)
   /((?:--?(?:password|passwd|token|secret|api[_-]?key|auth|credential)|["']?authorization["']?)\s*[:=]\s*["']?)((?!bearer\b)[^"'\s;|&]+)/gi,
