@@ -79,7 +79,10 @@ export const load = (input: { home: string; workspace: string }): Effect.Effect<
       deleteFileProtection: pick(team?.deleteFileProtection, project?.deleteFileProtection, user?.deleteFileProtection) ?? true,
       adminCommandDenylist: admin?.adminCommandDenylist ?? [],
       isAdminControlled: admin?.isAdminControlled ?? false,
-      sandboxPolicyType: pick(team?.sandboxPolicyType, project?.sandboxPolicyType, user?.sandboxPolicyType),
+      // Secure default: workspace_readonly unless explicitly opted out.
+      // (gate.ts's escalation guard and service.ts's substrate default both
+      // assume this; leaving it undefined here made the guard silently skip.)
+      sandboxPolicyType: pick(team?.sandboxPolicyType, project?.sandboxPolicyType, user?.sandboxPolicyType) ?? "workspace_readonly",
       forcePrompt: pick(team?.forcePrompt, project?.forcePrompt, user?.forcePrompt),
       layers,
     }

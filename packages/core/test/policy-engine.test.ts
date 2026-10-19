@@ -315,3 +315,60 @@ describe("QA-03 matcher unit checks", () => {
     expect(CommandMatcher.isDeleteOperation(CommandMatcher.parse("ls -la"))).toBe(false)
   })
 })
+
+describe("QA-03 P2: resolveApprovable wiring verification", () => {
+  test("undefined approvalMode keeps approvable (secure default)", () => {
+    const facts = decide(["terraform apply"])
+    expect(facts[0].state).toBe("approvable")
+    expect(ApprovalGate.resolveApprovable(facts[0], undefined)).toBe("approvable")
+  })
+
+  test("non-approvable states pass through unchanged", () => {
+    const denied = decide(["rm -rf /tmp/x"])[0]
+    expect(denied.state).toBe("denied")
+    expect(ApprovalGate.resolveApprovable(denied, "unrestricted")).toBe("denied")
+    expect(ApprovalGate.resolveApprovable(denied, undefined)).toBe("denied")
+  })
+
+  test("allowlist mode still prompts (not auto)", () => {
+    const facts = decide(["terraform apply"])
+    expect(ApprovalGate.resolveApprovable(facts[0], "allowlist")).toBe("approvable")
+  })
+})
+
+describe("QA-03 P2: matcher edge cases", () => {
+  test("empty command parses without crashing", () => {
+    const parsed = CommandMatcher.parse("")
+    expect(parsed.name).toBe("")
+    expect(parsed.raw).toBe("")
+    expect(CommandMatcher.hasShellExpansion("")).toBe(false)
+    expect(CommandMatcher.isDeleteOperation(parsed)).toBe(false)
+  })
+
+  test("whitespace-only command parses without crashing", () => {
+    const parsed = CommandMatcher.parse("   \t\n  ")
+    expect(parsed.name).toBe("")
+    expect(CommandMatcher.matchForms(parsed)).toEqual([])
+  })
+
+  test("very long command does not hang or crash", () => {
+    const long = "echo " + "x".repeat(100_000)
+    const parsed = CommandMatcher.parse(long)
+    expect(parsed.name).toBe("echo")
+    expect(CommandMatcher.hasShellExpansion(long)).toBe(false)
+    // redirectSafety should handle it without catastrophic backtracking
+    const result = CommandMatcher.redirectSafety(long, "/repo")
+    expect(typeof result.safe).toBe("boolean")
+  })
+
+  test("empty command through buildDecisionFacts", () => {
+    const facts = decide([""])
+    // Empty splits to nothing; no facts produced, no crash
+    expect(facts).toEqual([])
+  })
+
+  test("whitespace-only command through buildDecisionFacts", () => {
+    const facts = decide(["   "])
+    expect(facts).toEqual([])
+  })
+})
