@@ -1,3 +1,5 @@
+preload = ["./packages/cli/node_modules/@opentui/solid/scripts/preload.js"]
+
 [install]
 exact = true
 # Only install newly resolved package versions published at least 3 days ago.

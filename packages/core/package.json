@@ -76,7 +76,6 @@
   },
   "devDependencies": {
     "@ai-sdk/openai-compatible": "2.0.41",
-    "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
     "@modelcontextprotocol/server": "2.0.0",
     "@opencode/http-recorder": "workspace:*",
@@ -134,6 +133,7 @@
     "tree-sitter-powershell": "0.25.10",
     "web-tree-sitter": "0.25.10",
     "which": "6.0.1",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@effect/platform-node": "catalog:"
   }
 }
